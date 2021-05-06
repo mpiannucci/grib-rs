@@ -1,8 +1,21 @@
-use crate::{sections::{indicator::Discipline, section::Section}, templates::{data_representation::DataRepresentationTemplate, product::ProductTemplate}};
+use crate::{
+    sections::{
+        bitmap::BitmapSection,
+        data::DataSection,
+        data_representation::DataRepresentationSection,
+        end::{self, EndSection},
+        grid_definition::GridDefinitionSection,
+        identification::IdentificationSection,
+        indicator::{Discipline, IndicatorSection},
+        product_definition::ProductDefinitionSection,
+        section::Section,
+    },
+    templates::{data_representation::DataRepresentationTemplate, product::ProductTemplate},
+};
 use chrono::{DateTime, Utc};
 use grib_types::Parameter;
-use std::vec::Vec;
 use std::fmt::Display;
+use std::vec::Vec;
 
 pub struct MessageMetadata {
     pub discipline: Discipline,
@@ -19,27 +32,62 @@ pub struct MessageMetadata {
 }
 
 pub struct Message<'a> {
-    pub sections: Vec<Section<'a>>,
+    pub indicator_section: IndicatorSection<'a>,
+    pub identification_section: IdentificationSection<'a>,
+    pub grid_definition_section: GridDefinitionSection<'a>,
+    pub product_definition_section: ProductDefinitionSection<'a>,
+    pub data_representation_section: DataRepresentationSection<'a>,
+    pub bitmap_section: BitmapSection<'a>,
+    pub data_section: DataSection<'a>,
+    pub end_section: EndSection<'a>,
 }
 
 impl<'a> Message<'a> {
     pub fn parse(data: &'a [u8], offset: usize) -> Result<Message<'a>, &'static str> {
-        let mut sections: Vec<Section<'a>> = Vec::new();
+        let mut indicator_section: Option<IndicatorSection<'a>> = None;
+        let mut identification_section: Option<IdentificationSection<'a>> = None;
+        let mut grid_definition_section: Option<GridDefinitionSection<'a>> = None;
+        let mut product_definition_section: Option<ProductDefinitionSection<'a>> = None;
+        let mut data_representation_section: Option<DataRepresentationSection<'a>> = None;
+        let mut bitmap_section: Option<BitmapSection<'a>> = None;
+        let mut data_section: Option<DataSection<'a>> = None;
+        let mut end_section: Option<EndSection<'a>> = None;
 
         let mut current_offset = 0;
+        let mut current_section = 0;
         loop {
-            if let Some(section) = sections.last() {
-                if let Section::End(_) = section {
-                    break;
-                }
+            if current_section > 7 {
+                break;
             }
 
             let next_section = Section::from_data(data, offset + current_offset)?;
             current_offset += next_section.len();
-            sections.push(next_section);
+
+            match next_section {
+                Section::Indicator(s) => indicator_section = Some(s),
+                Section::Identification(s) => identification_section = Some(s),
+                Section::LocalUse(s) => {}
+                Section::GridDefinition(s) => grid_definition_section = Some(s),
+                Section::ProductDefinition(s) => product_definition_section = Some(s),
+                Section::DataRepresentation(s) => data_representation_section = Some(s),
+                Section::Bitmap(s) => bitmap_section = Some(s),
+                Section::Data(s) => data_section = Some(s),
+                Section::End(s) => end_section = Some(s),
+            }
+
+            current_section += 1;
         }
 
-        Ok(Message { sections })
+        Ok(Message {
+            indicator_section: indicator_section.unwrap(),
+            identification_section: identification_section.unwrap(),
+            grid_definition_section: grid_definition_section.unwrap(),
+            product_definition_section: product_definition_section.unwrap(),
+            data_representation_section: data_representation_section.unwrap(),
+            bitmap_section: bitmap_section.unwrap(),
+            data_section: data_section.unwrap(),
+            end_section: end_section.unwrap(),
+        })
     }
 
     pub fn parse_all(data: &'a [u8]) -> Vec<Message<'a>> {
@@ -61,11 +109,9 @@ impl<'a> Message<'a> {
     pub fn variable_names(messages: Vec<Message<'a>>) -> Vec<Option<String>> {
         Message::parameters(messages)
             .iter()
-            .map(|p| {
-                match p {
-                    Some(p) => Some(p.name.clone()),
-                    None => None,
-                }
+            .map(|p| match p {
+                Some(p) => Some(p.name.clone()),
+                None => None,
             })
             .collect()
     }
@@ -73,11 +119,9 @@ impl<'a> Message<'a> {
     pub fn variable_abbrevs(messages: Vec<Message<'a>>) -> Vec<Option<String>> {
         Message::parameters(messages)
             .iter()
-            .map(|p| {
-                match p {
-                    Some(p) => Some(p.abbrev.clone()),
-                    None => None,
-                }
+            .map(|p| match p {
+                Some(p) => Some(p.abbrev.clone()),
+                None => None,
             })
             .collect()
     }
@@ -85,11 +129,9 @@ impl<'a> Message<'a> {
     pub fn units(messages: Vec<Message<'a>>) -> Vec<Option<String>> {
         Message::parameters(messages)
             .iter()
-            .map(|p| {
-                match p {
-                    Some(p) => Some(p.unit.clone()),
-                    None => None,
-                }
+            .map(|p| match p {
+                Some(p) => Some(p.unit.clone()),
+                None => None,
             })
             .collect()
     }
@@ -98,11 +140,9 @@ impl<'a> Message<'a> {
         messages
             .iter()
             .map(|m| m.parameter())
-            .map(|r| {
-                match r {
-                    Ok(parameter) => Some(parameter),
-                    Err(_) => None,
-                }
+            .map(|r| match r {
+                Ok(parameter) => Some(parameter),
+                Err(_) => None,
             })
             .collect()
     }
@@ -111,49 +151,33 @@ impl<'a> Message<'a> {
         messages
             .iter()
             .map(|m| m.forecast_date())
-            .map(|r| {
-                match r {
-                    Ok(date) => Some(date),
-                    Err(_) => None,
-                }
+            .map(|r| match r {
+                Ok(date) => Some(date),
+                Err(_) => None,
             })
             .collect()
     }
 
     pub fn len(&self) -> usize {
-        match self.sections.first() {
-            Some(section) => match &section {
-                Section::Indicator(indicator) => indicator.total_length() as usize,
-                _ => 0,
-            },
-            None => 0,
-        }
+        self.indicator_section.total_length() as usize
     }
 
-    pub fn section_count(&self) -> usize {
-        self.sections.len()
-    }
+    // pub fn section_count(&self) -> usize {
+    //     self.sections.len()
+    // }
 
-    pub fn discipline(&self) -> Result<Discipline, String> {
-        match self.sections.first().unwrap() {
-            Section::Indicator(indicator) => Ok(indicator.discipline()),
-            _ => Err("Indicator section not found when reading discipline".into()),
-        }.clone()
+    pub fn discipline(&self) -> Discipline {
+        self.indicator_section.discipline()
     }
 
     pub fn parameter(&self) -> Result<Parameter, String> {
-        let discipline = self.discipline()?;
-
-        let product_definition = unwrap_or_return!(
-            self.sections.iter().find_map(|s| match s {
-                Section::ProductDefinition(product_definition) => Some(product_definition),
-                _ => None,
-            }),
-            "Product definition section not found when reading variable data".into()
-        );
+        let discipline = self.discipline();
 
         let product_template = unwrap_or_return!(
-            match product_definition.product_definition_template(discipline.clone() as u8) {
+            match self
+                .product_definition_section
+                .product_definition_template(discipline.clone() as u8)
+            {
                 ProductTemplate::HorizontalAnalysisForecast(template) => Some(template),
                 _ => None,
             },
@@ -178,74 +202,55 @@ impl<'a> Message<'a> {
         Ok(parameter.abbrev)
     }
 
-    pub fn reference_date(&self) -> Result<DateTime<Utc>, String> {
-        let reference_date = unwrap_or_return!(
-            self.sections.iter().find_map(|s| match s {
-                Section::Identification(identification) => Some(identification.reference_date()),
-                _ => None,
-            }),
-            "Identification section not found when reading reference date".into()
-        );
-        Ok(reference_date)
+    pub fn reference_date(&self) -> DateTime<Utc> {
+        self.identification_section.reference_date()
     }
 
     pub fn forecast_date(&self) -> Result<DateTime<Utc>, String> {
-        let discipline = self.discipline()?;
-
-        let product_definition = unwrap_or_return!(
-            self.sections.iter().find_map(|s| match s {
-                Section::ProductDefinition(product_definition) => Some(product_definition),
-                _ => None,
-            }),
-            "Product definition section not found when reading variable data".into()
-        );
+        let discipline = self.discipline();
 
         let product_template = unwrap_or_return!(
-            match product_definition.product_definition_template(discipline.clone() as u8) {
+            match self
+                .product_definition_section
+                .product_definition_template(discipline.clone() as u8)
+            {
                 ProductTemplate::HorizontalAnalysisForecast(template) => Some(template),
                 _ => None,
             },
             "Only HorizontalAnalysisForecast templates are supported at this time".into()
         );
 
-        let reference_date = self.reference_date()?;
+        let reference_date = self.reference_date();
         Ok(product_template.forecast_datetime(reference_date))
     }
 
     pub fn metadata(&self) -> Result<MessageMetadata, String> {
-        let discipline = self.discipline()?;
+        let discipline = self.discipline();
 
-        let reference_date = self.reference_date()?;
-
-        let grid_definition = unwrap_or_return!(
-            self.sections.iter().find_map(|s| match s {
-                Section::GridDefinition(grid_definition) => Some(grid_definition),
-                _ => None,
-            }),
-            "Grid definition section not found when reading variable data".into()
-        );
+        let reference_date = self.reference_date();
 
         let grid_template = unwrap_or_return!(
-            grid_definition.grid_definition_template(),
+            self.grid_definition_section.grid_definition_template(),
             "Only latitude longitude templates supported at this time".into()
         );
         let region = (grid_template.start(), grid_template.end());
-        let location_grid = (grid_template.latitude_count(), grid_template.longitude_count());
-        let location_resolution = (grid_template.latitude_resolution(), grid_template.longitude_resolution());
+        let location_grid = (
+            grid_template.latitude_count(),
+            grid_template.longitude_count(),
+        );
+        let location_resolution = (
+            grid_template.latitude_resolution(),
+            grid_template.longitude_resolution(),
+        );
 
         let parameter = self.parameter()?;
-    
+
         let forecast_date = self.forecast_date()?;
 
-        let data_representation = unwrap_or_return!(
-            self.sections.iter().find_map(|s| match s {
-                Section::DataRepresentation(data_representation) => Some(data_representation),
-                _ => None,
-            }),
-            "Product definition section not found when reading variable data".into()
-        );
-        let data_template_number = data_representation.data_representation_template_number();
-        let data_point_count = grid_definition.data_point_count();
+        let data_template_number = self
+            .data_representation_section
+            .data_representation_template_number();
+        let data_point_count = self.grid_definition_section.data_point_count();
 
         Ok(MessageMetadata {
             discipline,
@@ -258,62 +263,29 @@ impl<'a> Message<'a> {
             location_resolution,
             units: parameter.unit,
             data_template_number,
-            data_point_count
+            data_point_count,
         })
     }
 
     pub fn data(&self) -> Result<Vec<f64>, String> {
-        let data_section = unwrap_or_return!(
-            self.sections.iter().find_map(|s| match s {
-                Section::Data(data_section) => Some(data_section),
-                _ => None,
-            }),
-            "Data section not found when reading message data".into()
-        );
-
-        let raw_packed_data = data_section.raw_bit_data();
+        let raw_packed_data = self.data_section.raw_bit_data();
         println!("data sectionln: {}", raw_packed_data.len());
 
-        let data_representation_section = unwrap_or_return!(
-            self.sections.iter().find_map(|s| match s {
-                Section::DataRepresentation(data_representation_section) =>
-                    Some(data_representation_section),
-                _ => None,
-            }),
-            "Data representation section not found when reading message data".into()
-        );
-
         let data_representation_template = unwrap_or_return!(
-            data_representation_section.data_representation_template(),
+            self.data_representation_section
+                .data_representation_template(),
             "Failed to unpack the data representation template".into()
         );
 
-        let scaled_unpacked_data = data_representation_template
-            .unpack_all(raw_packed_data)?;
+        let scaled_unpacked_data = data_representation_template.unpack_all(raw_packed_data)?;
 
-        let bitmap_section = unwrap_or_return!(
-            self.sections.iter().find_map(|s| match s {
-                Section::Bitmap(bitmap_section) => Some(bitmap_section),
-                _ => None,
-            }),
-            "Bitmap section not found when reading message data".into()
-        );
-
-        let mapped_scaled_data = bitmap_section.map_data(scaled_unpacked_data);
+        let mapped_scaled_data = self.bitmap_section.map_data(scaled_unpacked_data);
         Ok(mapped_scaled_data)
     }
 
     pub fn data_locations(&self) -> Result<Vec<(f64, f64)>, String> {
-        let grid_definition = unwrap_or_return!(
-            self.sections.iter().find_map(|s| match s {
-                Section::GridDefinition(grid_definition) => Some(grid_definition),
-                _ => None,
-            }),
-            "Grid definition section not found when reading variable data".into()
-        );
-
         let grid_template = unwrap_or_return!(
-            grid_definition.grid_definition_template(),
+            self.grid_definition_section.grid_definition_template(),
             "Only latitude longitude templates supported at this time".into()
         );
 
@@ -321,58 +293,27 @@ impl<'a> Message<'a> {
     }
 
     pub fn data_at_location(&self, location: &(f64, f64)) -> Result<f64, String> {
-        let grid_definition = unwrap_or_return!(
-            self.sections.iter().find_map(|s| match s {
-                Section::GridDefinition(grid_definition) => Some(grid_definition),
-                _ => None,
-            }),
-            "Grid definition section not found when reading variable data".into()
-        );
-
         let grid_template = unwrap_or_return!(
-            grid_definition.grid_definition_template(),
+            self.grid_definition_section.grid_definition_template(),
             "Only latitude longitude templates supported at this time".into()
         );
 
         let location_index = grid_template.index_for_location(location.0, location.1)?;
 
-        let data_section = unwrap_or_return!(
-            self.sections.iter().find_map(|s| match s {
-                Section::Data(data_section) => Some(data_section),
-                _ => None,
-            }),
-            "Data section not found when reading message data".into()
-        );
-
-        let data_representation_section = unwrap_or_return!(
-            self.sections.iter().find_map(|s| match s {
-                Section::DataRepresentation(data_representation_section) =>
-                    Some(data_representation_section),
-                _ => None,
-            }),
-            "Data representation section not found when reading message data".into()
-        );
-
         let data_representation_template = unwrap_or_return!(
-            data_representation_section.data_representation_template(),
+            self.data_representation_section
+                .data_representation_template(),
             "Failed to unpack the data representation template".into()
         );
 
-        let bitmap_section = unwrap_or_return!(
-            self.sections.iter().find_map(|s| match s {
-                Section::Bitmap(bitmap_section) => Some(bitmap_section),
-                _ => None,
-            }),
-            "Bitmap section not found when reading message data".into()
-        );
-
         let data_index = unwrap_or_return!(
-            bitmap_section.data_index(location_index), 
+            self.bitmap_section.data_index(location_index),
             format!("No data available at index {}", location_index).into()
         );
 
-        let raw_packed_data = data_section.raw_bit_data();
-        let data = data_representation_template.unpack_range(raw_packed_data, data_index..data_index+1)?;
+        let raw_packed_data = self.data_section.raw_bit_data();
+        let data = data_representation_template
+            .unpack_range(raw_packed_data, data_index..data_index + 1)?;
 
         Ok(data[0])
     }
